@@ -27,7 +27,7 @@ Or add the package to your `opencode.jsonc` directly (opencode installs missing 
 
 ```jsonc
 {
-  "plugin": ["opencode-doom-loop-detector"]
+  "plugins": ["opencode-doom-loop-detector"]
 }
 ```
 
