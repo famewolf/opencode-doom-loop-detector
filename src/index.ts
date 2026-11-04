@@ -1,7 +1,7 @@
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Session } from "@opencode/schema/session"
 import type { SessionEvent } from "@opencode/schema/session-event"
-import { Effect, Scope, Stream } from "effect"
+import { Effect, Exit, Scope, Stream } from "effect"
 import { Tool } from "@opencode/schema/tool"
 import { DoomLoopDetector } from "./detector.js"
 import { DoomLoopFold } from "./fold.js"
@@ -19,13 +19,6 @@ import { DoomLoopFold } from "./fold.js"
 // session no hook is touching.
 
 const DEFAULT_MAX_TRACKED_SESSIONS = 64
-let maxTrackedSessions = DEFAULT_MAX_TRACKED_SESSIONS
-
-// Test seam: suites lower the cap to exercise eviction without booting 65 sessions. Call with no
-// argument to restore the default.
-export function setMaxTrackedSessions(limit: number = DEFAULT_MAX_TRACKED_SESSIONS) {
-  maxTrackedSessions = limit
-}
 
 type Tracked =
   | SessionEvent.Deleted
@@ -42,9 +35,13 @@ interface Entry {
 
 const circuitKey = (sessionID: Session.ID) => `circuit:${sessionID}`
 
-export const Plugin = define({
-  id: "opencode.doom.loop",
-  effect: Effect.fn(function* (ctx) {
+// Factory-injected cap: tests construct a plugin with a small cap instead of mutating shared state.
+export function makePlugin(options?: { maxTrackedSessions?: number }) {
+  const cap = options?.maxTrackedSessions ?? DEFAULT_MAX_TRACKED_SESSIONS
+
+  return define({
+    id: "opencode.doom.loop",
+    effect: Effect.fn(function* (ctx) {
     const scope = yield* Scope.Scope
     const sessions = new Map<Session.ID, Promise<Entry>>()
 
@@ -74,7 +71,7 @@ export const Plugin = define({
       sessions.set(sessionID, created)
       // Eviction is a bare delete: the KV breaker key belongs to the session lifecycle, not to
       // this cache, and everything else re-folds from durable history on the next touch.
-      while (sessions.size > maxTrackedSessions) {
+      while (sessions.size > cap) {
         const oldest = sessions.keys().next().value
         if (oldest === undefined) break
         sessions.delete(oldest)
@@ -111,11 +108,36 @@ export const Plugin = define({
         })
         if (verdict.kind === "pass") return
         if (verdict.kind === "circuit") {
+          // A sticky circuit (a previous denial) stops without re-asking, until the user speaks.
+          if (verdict.sticky) {
+            yield* ctx.session.interrupt({ sessionID: event.sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+            return yield* new Tool.Error({ message: verdict.message, metadata: DoomLoopDetector.blockedMetadata })
+          }
+          // The breaker goes through doom_loop like every other signal: allow resets B and lets
+          // the run continue; a denial makes the stop sticky and explains why it happened.
+          const resource = `${event.tool}:${sigHash}${DoomLoopDetector.resourceSuffix.b}`
+          const outcome = yield* Effect.exit(
+            ctx.permission.assert({
+              sessionID: event.sessionID,
+              agent: event.agent,
+              action: "doom_loop",
+              resources: [resource],
+              save: [resource],
+              source: { type: "tool", messageID: event.messageID, id: event.id },
+            }),
+          )
+          if (Exit.isSuccess(outcome)) {
+            current.state.bStreak = 0
+            return
+          }
           yield* ctx.storage.set(circuitKey(event.sessionID), true).pipe(Effect.ignore)
-          // Hard stop: interrupt the drain without awaiting — the fork outlives the aborted step
-          // fiber. The handoff message is best-effort and expected to be lost with the step.
+          current.state.circuitBroken = true
           yield* ctx.session.interrupt({ sessionID: event.sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-          return yield* new Tool.Error({ message: verdict.message, metadata: DoomLoopDetector.blockedMetadata })
+          const reason = Exit.isFailure(outcome) ? outcome.cause.toString() : ""
+          return yield* new Tool.Error({
+            message: `${verdict.message}\n\n${reason}`,
+            metadata: DoomLoopDetector.blockedMetadata,
+          })
         }
         const resource = `${event.tool}:${sigHash}${DoomLoopDetector.resourceSuffix[verdict.signal]}`
         // host.ts maps BlockedError/CorrectedError to Tool.Error and keeps a plain rejection a
@@ -160,7 +182,7 @@ export const Plugin = define({
           const warning = DoomLoopDetector.recordFailed(current.state, {
             tool: event.tool,
             errorText: event.error.message,
-            validation: event.error.message.startsWith("Invalid arguments for tool"),
+            validation: event.error.message.startsWith(DoomLoopDetector.VALIDATION_PREFIX),
           })
           if (warning !== undefined) event.error.message = `${event.error.message}\n\n${warning}`
           return
@@ -235,4 +257,7 @@ export const Plugin = define({
       Effect.forkScoped({ startImmediately: true }),
     )
   }),
-})
+  })
+}
+
+export const Plugin = makePlugin()

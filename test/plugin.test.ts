@@ -143,6 +143,59 @@ describe("doom loop plugin (standalone)", () => {
     expect(h.asserted).toHaveLength(1)
   })
 
+  it("resets B and lets the run continue when the circuit ask is allowed", async () => {
+    const h = await run()
+    const input = { command: "probe" }
+    const out = (i: number) => `probe ${i}\nstatic line one\nstatic line two`
+    for (let i = 1; i <= 13; i++) {
+      await emit(h, "shell", input, `al_${i}`, text(out(i)))
+    }
+    const exit = await Effect.runPromise(Effect.exit(h.before(beforeEvent("shell", input, "al_14"))))
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect(h.asserted).toHaveLength(1)
+    expect(h.interrupts()).toBe(0)
+  })
+
+  it("makes a denied circuit sticky and does not re-ask on retry", async () => {
+    const h = await run()
+    const input = { command: "probe" }
+    const out = (i: number) => `probe ${i}\nstatic line one\nstatic line two`
+    for (let i = 1; i <= 13; i++) {
+      await emit(h, "shell", input, `dn_${i}`, text(out(i)))
+    }
+    h.setOutcome(() => Effect.fail(new Tool.Error({ message: "Permission denied: doom_loop" })))
+    await Effect.runPromise(Effect.exit(h.before(beforeEvent("shell", input, "dn_14"))))
+    expect(h.asserted).toHaveLength(1)
+    await Effect.runPromise(Effect.exit(h.before(beforeEvent("shell", input, "dn_15"))))
+    expect(h.asserted).toHaveLength(1)
+    expect(h.interrupts()).toBe(2)
+  })
+
+  it("resets A and C on a real user message", async () => {
+    const deferred = Promise.withResolvers<void>()
+    const userEvent = {
+      type: "session.inbox.enqueued",
+      data: { sessionID, item: { type: "user", payload: { text: "stop that" }, delivery: "queue" } },
+    }
+    const h = await run({
+      // The event stream emits the user message when the test resolves it after six calls.
+      eventStream: Stream.fromEffect(Effect.promise(() => deferred.promise)).pipe(
+        Stream.map(() => userEvent),
+        Stream.concat(Stream.never),
+      ) as never,
+    })
+    const input = { command: "git status" }
+    const out = "on branch main\nnothing to commit\nworking tree clean"
+    for (let i = 1; i <= 6; i++) {
+      await emit(h, "shell", input, `u_${i}`, text(out))
+    }
+    deferred.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const exit = await Effect.runPromise(Effect.exit(h.before(beforeEvent("shell", input, "u_7"))))
+    expect(Exit.isSuccess(exit)).toBe(true)
+    expect(h.asserted).toHaveLength(0)
+  })
+
   it("folds durable history into A on first touch and challenges the 7th identical emission", async () => {
     const input = { pattern: "TODO", path: "src" }
     const out = "src/a.ts:1:TODO\nsrc/b.ts:2:TODO\nsrc/c.ts:3:TODO"
