@@ -17,7 +17,13 @@ Every stop goes through the existing `doom_loop` permission ask, so intentional 
 
 ## Install
 
-Add the package to your `opencode.jsonc`:
+Either use the CLI:
+
+```bash
+opencode plugin add opencode-doom-loop-detector
+```
+
+Or add the package to your `opencode.jsonc` directly (opencode installs missing npm plugins automatically at startup):
 
 ```jsonc
 {
