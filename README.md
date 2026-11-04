@@ -36,7 +36,8 @@ No configuration is required. The default thresholds are the ones above.
 
 ## Verification
 
-- 67 tests in the upstream PR, plus this package's own detector and integration suites.
+- This package: 45 tests pass (37 detector + 8 integration), `tsc --noEmit` clean.
+- Upstream PR: 67 tests pass, typecheck clean; the review bot confirmed all four threads it raised are fixed.
 - Upstream PR: https://github.com/anomalyco/opencode/pull/61328
 - Incident analysis and call-by-call replays: https://metal-huang.github.io/opencode/doom-loop-report/
 - Prior-art review of 14 harnesses: https://metal-huang.github.io/opencode/doom-loop-report/prior-art.html
