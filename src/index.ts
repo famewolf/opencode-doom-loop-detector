@@ -1,7 +1,7 @@
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Session } from "@opencode/schema/session"
 import type { SessionEvent } from "@opencode/schema/session-event"
-import { Effect, Exit, Scope, Stream } from "effect"
+import { Effect, Exit, Option, Scope, Stream } from "effect"
 import { Tool } from "@opencode/schema/tool"
 import { DoomLoopDetector } from "./detector.js"
 import { DoomLoopFold } from "./fold.js"
@@ -130,12 +130,26 @@ export function makePlugin(options?: { maxTrackedSessions?: number }) {
             current.state.bStreak = 0
             return
           }
-          yield* ctx.storage.set(circuitKey(event.sessionID), true).pipe(Effect.ignore)
-          current.state.circuitBroken = true
-          yield* ctx.session.interrupt({ sessionID: event.sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-          const reason = Exit.isFailure(outcome) ? outcome.cause.toString() : ""
+          const error = Option.getOrUndefined(Exit.findErrorOption(outcome))
+          // A rule-based denial makes the stop sticky; a CorrectedError carries model feedback and
+          // returns as a plain Tool.Error so the model can act on it (no sticky stop, no interrupt).
+          // Only a CorrectedError returns as plain feedback for the model (no sticky stop).
+          // The public API errors are Tool.Error, so identify a correction by its tag (both a bare
+          // error and the host-wrapped `error` field), rather than by class identity.
+          const tagOf = (value: unknown): string | undefined =>
+            typeof value === "object" && value !== null && "_tag" in value
+              ? (value as { _tag: string })._tag
+              : undefined
+          const corrected =
+            tagOf(error) === "Permission.CorrectedError" ||
+            (error instanceof Tool.Error && tagOf(error.error) === "Permission.CorrectedError")
+          if (!corrected) {
+            yield* ctx.storage.set(circuitKey(event.sessionID), true).pipe(Effect.ignore)
+            current.state.circuitBroken = true
+            yield* ctx.session.interrupt({ sessionID: event.sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+          }
           return yield* new Tool.Error({
-            message: `${verdict.message}\n\n${reason}`,
+            message: `${verdict.message}\n\n${error?.message ?? "rejected"}`,
             metadata: DoomLoopDetector.blockedMetadata,
           })
         }
@@ -181,6 +195,7 @@ export function makePlugin(options?: { maxTrackedSessions?: number }) {
           // direction (detect more; C still only ever asks, never hard-blocks silently).
           const warning = DoomLoopDetector.recordFailed(current.state, {
             tool: event.tool,
+            sigHash,
             errorText: event.error.message,
             validation: event.error.message.startsWith(DoomLoopDetector.VALIDATION_PREFIX),
           })

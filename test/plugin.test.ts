@@ -171,6 +171,25 @@ describe("doom loop plugin (standalone)", () => {
     expect(h.interrupts()).toBe(2)
   })
 
+  it("returns a host-wrapped CorrectedError as feedback without a sticky stop", async () => {
+    const h = await run()
+    const input = { command: "probe" }
+    const out = (i: number) => `probe ${i}\nstatic line one\nstatic line two`
+    for (let i = 1; i <= 13; i++) {
+      await emit(h, "shell", input, `ce_${i}`, text(out(i)))
+    }
+    h.setOutcome(() =>
+      Effect.fail(
+        new Tool.Error({
+          message: "Use staging instead",
+          error: { _tag: "Permission.CorrectedError", feedback: "Use staging instead" } as never,
+        }),
+      ),
+    )
+    await Effect.runPromise(Effect.exit(h.before(beforeEvent("shell", input, "ce_14"))))
+    expect(h.interrupts()).toBe(0)
+  })
+
   it("resets A and C on a real user message", async () => {
     const deferred = Promise.withResolvers<void>()
     const userEvent = {
