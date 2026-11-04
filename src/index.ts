@@ -276,3 +276,5 @@ export function makePlugin(options?: { maxTrackedSessions?: number }) {
 }
 
 export const Plugin = makePlugin()
+
+export default Plugin
