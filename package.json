@@ -1,0 +1,40 @@
+{
+  "name": "opencode-doom-loop-detector",
+  "version": "0.1.0",
+  "description": "Doom-loop detection for opencode v2: catches repeated tool-call loops (consecutive, periodic rotation, failure streaks) and stops them through the existing doom_loop permission ask.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts --outfile dist/index.js --external @opencode/plugin --external @opencode/schema --external effect",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "peerDependencies": {
+    "@opencode/plugin": "^2.2.5",
+    "@opencode/schema": "^2.2.5",
+    "effect": "4.0.6"
+  },
+  "devDependencies": {
+    "@opencode/plugin": "^2.2.5",
+    "@opencode/schema": "^2.2.5",
+    "effect": "4.0.6",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "doom-loop",
+    "loop-detection",
+    "agent"
+  ]
+}
